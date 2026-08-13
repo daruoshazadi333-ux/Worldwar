@@ -1,1 +1,1 @@
-rubka
+rubka==8.1.10
