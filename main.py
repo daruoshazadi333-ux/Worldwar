@@ -5,7 +5,9 @@ from os import system as os_system, name as os_name
 from rubka.asynco import Robot
 from rubka.context import Message
 from rubka.keypad import ChatKeypadBuilder
+from pathlib import Path
 
+BASE_DIR = Path(__file__).parent
 # ---------- Logging ----------
 logging.basicConfig(
     level=logging.INFO,
