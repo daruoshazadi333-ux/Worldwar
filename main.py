@@ -376,7 +376,7 @@ async def do_attack(bot,cid,data,countries,uid,target,eq,amt):
         if countries[target].get("defense"): dmg = max(0,dmg-300)
         countries[target]["damage_taken"] = countries[target].get("damage_taken",0)+dmg
         destroyed = False
-        if target!="US" and countries[target]["damage_taken"]>=50000:
+        if target!="US" and countries[target]["damage_taken"]>=200000:
             if towner in data.get("users",{}):
                 await destroy(bot,data,countries,target,towner)
                 destroyed=True
@@ -398,7 +398,7 @@ async def do_attack(bot,cid,data,countries,uid,target,eq,amt):
         if countries[target].get("defense"): dmg = max(0,dmg-200)
         countries[target]["damage_taken"] = countries[target].get("damage_taken",0)+dmg
         destroyed = False
-        if target!="US" and countries[target]["damage_taken"]>=50000:
+        if target!="US" and countries[target]["damage_taken"]>=200000:
             if towner in data.get("users",{}):
                 await destroy(bot,data,countries,target,towner)
                 destroyed=True
@@ -798,13 +798,9 @@ async def handler(bot_instance:Robot,msg:Message):
                         if target not in data["user_packs"]: data["user_packs"][target]=[]
                         if pack_name in data["user_packs"][target]: await bot_instance.send_message(cid,"⚠️ کاربر این پک را دارد!")
                         else:
-                            data.setdefault("user_packs", {}).setdefault(target, [])
-                            data.setdefault("user_eq", {}).setdefault(target, {})
                             data["user_packs"][target].append(pack_name)
-                            for eq_name, amount in PACKS[pack_name][3].items():
-                                data["user_eq"][target][eq_name] = data["user_eq"][target].get(eq_name, 0) + int(amount)
                             save_data(data)
-                            await bot_instance.send_message(cid, f"✅ پک {pack_name} اضافه شد.\n🧰 تجهیزات پک هم به موجودی کاربر اضافه شدند.")
+                            await bot_instance.send_message(cid,f"✅ پک {pack_name} اضافه شد.")
                 except: await bot_instance.send_message(cid,"❌ فرمت اشتباه")
                 user_states[cid]={}; return
             if cb=="ad_add_eq":
@@ -888,8 +884,17 @@ async def handler(bot_instance:Robot,msg:Message):
             if my: txt+=f"\n🌍 کشور: {my['flag']} {my['name']}\n💥 خسارت: {fn(my.get('damage_taken',0))}/۵۰,۰۰۰"
             await bot_instance.send_message(cid,txt); return
         if cb=="alliance_menu":
-            await bot_instance.send_message(cid, "🤝 برای دریافت اتحاد و نحوه عضویت وارد کانال زیر شوید:\\n\\n📢 @war_ethad", chat_keypad=get_main_menu())
-            return
+            name,_=get_al(adata,uid); is_member=name is not None; is_leader=is_leader(adata,uid)
+            traitor=adata["traitor_until"].get(uid)
+            if traitor:
+                try:
+                    until=datetime.fromisoformat(traitor)
+                    if datetime.now()<until:
+                        h=(until-datetime.now()).seconds//3600
+                        await bot_instance.send_message(cid,f"⛔ به دلیل خیانت تا {h} ساعت نمی‌توانید عضو اتحاد شوید.",chat_keypad=get_main_menu()); return
+                    else: del adata["traitor_until"][uid]; save_alliance(adata)
+                except: pass
+            await bot_instance.send_message(cid,"🤝 منوی اتحادها",chat_keypad=get_alliance_menu(is_member,is_leader)); return
         if cb=="alliance_create":
             if get_al(adata,uid)[0]: return await bot_instance.send_message(cid,"❌ شما قبلاً عضو یک اتحاد هستید!")
             if not any(i.get("owner")==uid for i in countries.values()): return await bot_instance.send_message(cid,"❌ برای ایجاد اتحاد باید کشور داشته باشید!")
