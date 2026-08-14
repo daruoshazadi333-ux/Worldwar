@@ -289,6 +289,102 @@ async def bot_ai(bot,data,countries):
             data["user_eq"]["BOT_AI"]={"اف۲۲":200,"موشک":500,"پدافند":600,"تانک":150,"پهپاد":200,"بمب اتم":20,"خیبرشکن":100,"ناو":50}
             save_data(data); save_countries(countries)
 
+# ---------- BOT counterattack ----------
+async def bot_counterattack(bot, data, countries, attacked_uid, reason=""):
+    """Immediately retaliate against a player who attacked BOT_AI.
+    This function is intentionally isolated from do_attack so it cannot recursively trigger itself.
+    """
+    try:
+        if attacked_uid == "BOT_AI":
+            return
+        bot_country = data.get("bot_country")
+        if not bot_country or bot_country not in countries:
+            bot_country = next((c for c, info in countries.items() if info.get("owner")=="BOT_AI"), None)
+        if not bot_country:
+            return
+
+        # Find the player's current country.
+        target_code = next((c for c, info in countries.items() if info.get("owner")==attacked_uid), None)
+        if not target_code or target_code == bot_country:
+            return
+
+        bot_eq = data.setdefault("user_eq", {}).setdefault("BOT_AI", {})
+        available = [(name, int(amount)) for name, amount in bot_eq.items()
+                     if name in EQUIP and int(amount) > 0]
+        if not available:
+            # Self-heal an empty AI arsenal.
+            defaults = {"اف۲۲":200,"موشک":500,"پدافند":600,"تانک":150,
+                        "پهپاد":200,"بمب اتم":20,"خیبرشکن":100,"ناو":50}
+            for name, amount in defaults.items():
+                if name in EQUIP:
+                    bot_eq[name] = amount
+            available = [(name, int(amount)) for name, amount in bot_eq.items()
+                         if name in EQUIP and int(amount) > 0]
+        if not available:
+            return
+
+        # Prefer a strong but controlled weapon.
+        available.sort(key=lambda x: EQUIP[x[0]][3], reverse=True)
+        eq_name, stock = available[0]
+        use = max(1, min(stock, max(1, stock // 10)))
+        eq_power = max(1, int(EQUIP[eq_name][3]))
+        attack_power = int(use * eq_power * 0.75)
+
+        target_info = countries[target_code]
+        defense = defense_power(data, attacked_uid)
+        win_ch = max(0.35, min(0.85, attack_power/(attack_power+defense))) if defense > 0 else 0.8
+        # AI retaliates deterministically enough to feel responsive, but not every hit is overwhelming.
+        won = random.random() < win_ch
+        damage = int(attack_power * (0.55 if won else 0.12))
+        if target_info.get("defense"):
+            damage = max(0, damage - 150)
+        if damage <= 0:
+            damage = 1
+
+        bot_eq[eq_name] = max(0, stock-use)
+        target_info["damage_taken"] = target_info.get("damage_taken", 0) + damage
+
+        destroyed = False
+        if target_code != "US" and target_info["damage_taken"] >= 200000:
+            await destroy(bot, data, countries, target_code, attacked_uid)
+            destroyed = True
+
+        save_countries(countries)
+        save_data(data)
+
+        flag = target_info.get("flag","🌍")
+        name = target_info.get("name","کشور")
+        result = (
+            "🤖⚔️ ضدحمله ربات\n\n"
+            f"🎯 هدف: {flag} {name}\n"
+            f"💣 سلاح: {eq_name} × {use}\n"
+            f"💥 خسارت: {fn(damage)}\n"
+            f"📊 خسارت کل: {fn(target_info.get('damage_taken',0))}/۲۰۰,۰۰۰\n"
+        )
+        if destroyed:
+            result += "☠️ کشور شما در ضدحمله نابود شد!"
+        elif won:
+            result += "🔴 ربات در ضدحمله موفق شد."
+        else:
+            result += "🟡 ضدحمله ربات انجام شد، اما قدرت آن محدود بود."
+
+        try:
+            await bot.send_message(attacked_uid, result, chat_keypad=get_main_menu())
+        except Exception:
+            pass
+
+        # Notify others without allowing a notification failure to break the attack flow.
+        try:
+            await broadcast_war(
+                bot, data, countries, "BOT_AI", target_code,
+                eq_name, use, damage, won,
+                "🤖 این حمله، پاسخ مستقیم ربات به حمله قبلی بود."
+            )
+        except Exception:
+            pass
+    except Exception as e:
+        logger.error(f"BOT counterattack error: {e}\n{traceback.format_exc()}")
+
 # ---------- destroy country ----------
 async def destroy(bot,data,countries,code,owner):
     info=countries[code]
@@ -390,9 +486,11 @@ async def do_attack(bot,cid,data,countries,uid,target,eq,amt):
         addc(data,uid,100)
         save_countries(countries); save_data(data)
         user_coins = get_coins(data,uid)
-        result = f"{mh('گزارش نبرد','⚔️')}\n\n🏆 پیروز شدید!\n\n🗡 {attacker_flag} {attacker_name}\n🎯 {target_flag} {target_name}\n💣 {eq} × {fn(used)}\n📦 موجودی: {fn(remaining)}\n⚔️ قدرت حمله: {fn(attack_power)}\n🛡 پدافند دشمن: {fn(tdef)}\n📊 شانس برد: {int(win_ch*100)}٪\n💥 خسارت: {fn(dmg)} (کل: {fn(countries[target].get('damage_taken',0))}/۵۰,۰۰۰)\n{loot_text}\n🪙 +۱۰۰ کوین\n🪙 موجودی: {fn(user_coins)}"
+        result = f"{mh('گزارش نبرد','⚔️')}\n\n🏆 پیروز شدید!\n\n🗡 {attacker_flag} {attacker_name}\n🎯 {target_flag} {target_name}\n💣 {eq} × {fn(used)}\n📦 موجودی: {fn(remaining)}\n⚔️ قدرت حمله: {fn(attack_power)}\n🛡 پدافند دشمن: {fn(tdef)}\n📊 شانس برد: {int(win_ch*100)}٪\n💥 خسارت: {fn(dmg)} (کل: {fn(countries[target].get('damage_taken',0))}/۲۰۰,۰۰۰)\n{loot_text}\n🪙 +۱۰۰ کوین\n🪙 موجودی: {fn(user_coins)}"
         await bot.send_message(cid, result, chat_keypad=get_main_menu())
         await broadcast_war(bot,data,countries,uid,target,eq,used,dmg,True,loot_text)
+        if towner=="BOT_AI":
+            await bot_counterattack(bot,data,countries,uid,"player_won")
     else:
         dmg = int(attack_power*0.15)
         if countries[target].get("defense"): dmg = max(0,dmg-200)
@@ -407,9 +505,11 @@ async def do_attack(bot,cid,data,countries,uid,target,eq,amt):
         addc(data,uid,-20)
         save_countries(countries); save_data(data)
         user_coins = get_coins(data,uid)
-        result = f"{mh('گزارش نبرد','⚔️')}\n\n💀 شکست خوردید!\n\n🗡 {attacker_flag} {attacker_name}\n🎯 {target_flag} {target_name}\n💣 {eq} × {fn(used)}\n📦 موجودی: {fn(remaining)}\n⚔️ قدرت حمله: {fn(attack_power)}\n🛡 پدافند دشمن: {fn(tdef)}\n📊 شانس برد: {int(win_ch*100)}٪\n💥 خسارت: {fn(dmg)} (کل: {fn(countries[target].get('damage_taken',0))}/۵۰,۰۰۰)\n{casualty}\n🪙 -۲۰ کوین\n🪙 موجودی: {fn(user_coins)}"
+        result = f"{mh('گزارش نبرد','⚔️')}\n\n💀 شکست خوردید!\n\n🗡 {attacker_flag} {attacker_name}\n🎯 {target_flag} {target_name}\n💣 {eq} × {fn(used)}\n📦 موجودی: {fn(remaining)}\n⚔️ قدرت حمله: {fn(attack_power)}\n🛡 پدافند دشمن: {fn(tdef)}\n📊 شانس برد: {int(win_ch*100)}٪\n💥 خسارت: {fn(dmg)} (کل: {fn(countries[target].get('damage_taken',0))}/۲۰۰,۰۰۰)\n{casualty}\n🪙 -۲۰ کوین\n🪙 موجودی: {fn(user_coins)}"
         await bot.send_message(cid, result, chat_keypad=get_main_menu())
         await broadcast_war(bot,data,countries,uid,target,eq,used,dmg,False,casualty)
+        if towner=="BOT_AI":
+            await bot_counterattack(bot,data,countries,uid,"player_lost")
 
 # ---------- daily reward / leave ----------
 async def daily(bot,cid,data,uid):
@@ -881,20 +981,15 @@ async def handler(bot_instance:Robot,msg:Message):
             fac_name=f"{FACTIONS[fac]['icon']} {FACTIONS[fac]['name']}" if fac and fac in FACTIONS else "❌ ندارد"
             aname,_=get_al(adata,uid); al_str=aname if aname else "❌ ندارد"
             txt=f"👤 پروفایل\n🆔 {gid(msg,uid)}\n🔑 شناسه: {st(uid,'m')}\n🪙 کوین: {fn(user_coins)}\n⚔️ قدرت: {fn(pwr)}\n🌐 سازمان ملل: {un_status}\n⚔️ گروهک: {fac_name}\n🤝 اتحاد: {al_str}"
-            if my: txt+=f"\n🌍 کشور: {my['flag']} {my['name']}\n💥 خسارت: {fn(my.get('damage_taken',0))}/۵۰,۰۰۰"
+            if my: txt+=f"\n🌍 کشور: {my['flag']} {my['name']}\n💥 خسارت: {fn(my.get('damage_taken',0))}/۲۰۰,۰۰۰"
             await bot_instance.send_message(cid,txt); return
         if cb=="alliance_menu":
-            name,_=get_al(adata,uid); is_member=name is not None; is_leader=is_leader(adata,uid)
-            traitor=adata["traitor_until"].get(uid)
-            if traitor:
-                try:
-                    until=datetime.fromisoformat(traitor)
-                    if datetime.now()<until:
-                        h=(until-datetime.now()).seconds//3600
-                        await bot_instance.send_message(cid,f"⛔ به دلیل خیانت تا {h} ساعت نمی‌توانید عضو اتحاد شوید.",chat_keypad=get_main_menu()); return
-                    else: del adata["traitor_until"][uid]; save_alliance(adata)
-                except: pass
-            await bot_instance.send_message(cid,"🤝 منوی اتحادها",chat_keypad=get_alliance_menu(is_member,is_leader)); return
+            await bot_instance.send_message(
+                cid,
+                "🤝 برای دریافت اتحاد، وارد کانال زیر شوید:\n\n📢 @war_ethad",
+                chat_keypad=get_main_menu()
+            )
+            return
         if cb=="alliance_create":
             if get_al(adata,uid)[0]: return await bot_instance.send_message(cid,"❌ شما قبلاً عضو یک اتحاد هستید!")
             if not any(i.get("owner")==uid for i in countries.values()): return await bot_instance.send_message(cid,"❌ برای ایجاد اتحاد باید کشور داشته باشید!")
@@ -1079,7 +1174,7 @@ async def handler(bot_instance:Robot,msg:Message):
                 today=date.today().isoformat()
                 data["users"][uid].setdefault("daily_statements",{})
                 cnt=data["users"][uid]["daily_statements"].get(today,0)
-                if cnt>=20: return await bot_instance.send_message(cid,"❌ محدودیت ۲۰ بیانیه!")
+                if cnt>=30: return await bot_instance.send_message(cid,"❌ محدودیت ۳۰ بیانیه!")
                 data["users"][uid]["daily_statements"][today]=cnt+1
                 addc(data,uid,50); save_data(data)
                 full_id=gid(msg,uid)
