@@ -95,6 +95,13 @@ PACKS = {
 # ---------- helpers ----------
 def st(t,s="b"): return f"{F[s]}{t}{F[s]}"
 def fn(n): return f"{n:,}"
+
+# قیمت‌های متعادل‌تر فروشگاه؛ دیتابیس کاربران و موجودی‌های قبلی دست‌نخورده می‌ماند.
+PRICE_FACTOR = 0.80
+def equip_price(name):
+    return max(1, int(EQUIP[name][0] * PRICE_FACTOR))
+def pack_price(name):
+    return max(1, int(PACKS[name][0] * PRICE_FACTOR))
 def ml(c="▬",n=30): return c*n
 def mh(t,i="🔹"): return f"{i}{ml('═',15)}{i}\n{st('  '+t+'  ','b')}\n{i}{ml('═',15)}{i}"
 def mf(txt,title="",icon="📨"):
@@ -148,6 +155,18 @@ def defense_power(data,uid):
     if fac and fac in FACTIONS: dp=int(dp*FACTIONS[fac]["def"])
     return dp
 
+def resolve_user_id(data, raw):
+    """Accept a numeric ID or a saved username (@name/name)."""
+    raw=str(raw or "").strip()
+    if raw in data.get("users",{}):
+        return raw
+    needle=raw.lstrip("@").casefold()
+    for uid, info in data.get("users",{}).items():
+        name=str(info.get("username","")).lstrip("@").casefold()
+        if name == needle:
+            return uid
+    return None
+
 def get_coins(data,uid): return data.get("users",{}).get(uid,{}).get("coins",0)
 
 def addc(data,uid,amt):
@@ -199,16 +218,46 @@ def consume(data,uid,eq,amt):
 def load_alliance():
     try:
         if ALLIANCE_FILE.exists():
-            with ALLIANCE_FILE.open('r',encoding='utf-8') as f: return json.load(f)
-    except: pass
-    d={"alliances":{},"user_alliance":{},"traitor_until":{}}
+            with ALLIANCE_FILE.open("r",encoding="utf-8") as f:
+                d=json.load(f)
+        else:
+            d={}
+    except Exception:
+        logger.exception("load_alliance failed")
+        d={}
+    d.setdefault("alliances",{})
+    d.setdefault("user_alliance",{})
+    d.setdefault("traitor_until",{})
+    if not isinstance(d["alliances"],dict): d["alliances"]={}
+    if not isinstance(d["user_alliance"],dict): d["user_alliance"]={}
+    if not isinstance(d["traitor_until"],dict): d["traitor_until"]={}
+    # Repair malformed alliance records.
+    for name, info in list(d["alliances"].items()):
+        if not isinstance(info,dict):
+            del d["alliances"][name]
+            continue
+        info.setdefault("leader",None)
+        info.setdefault("members",[])
+        info.setdefault("created",datetime.now().isoformat())
+        if not isinstance(info["members"],list): info["members"]=[]
     save_alliance(d)
     return d
 def save_alliance(d):
     try:
-        with ALLIANCE_FILE.open('w',encoding='utf-8') as f: json.dump(d,f,indent=4,ensure_ascii=False)
-    except: pass
+        ALLIANCE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp=ALLIANCE_FILE.with_suffix(ALLIANCE_FILE.suffix+".tmp")
+        with tmp.open("w",encoding="utf-8") as f:
+            json.dump(d,f,indent=4,ensure_ascii=False)
+            f.flush()
+        tmp.replace(ALLIANCE_FILE)
+        return True
+    except Exception:
+        logger.exception("save_alliance failed")
+        return False
 def get_al(ad,uid):
+    ad.setdefault("pending_invites", {})
+    for _n, _a in ad.get("alliances", {}).items():
+        _a.setdefault("deputy", None); _a.setdefault("treasury", 0); _a.setdefault("members", [])
     name=ad["user_alliance"].get(uid)
     if name and name in ad["alliances"]: return name,ad["alliances"][name]
     return None,None
@@ -249,13 +298,47 @@ def load_data():
     d=safe_json_load(DATA_FILE,None)
     if d is None:
         d={"users":{},"banned_users":[],"user_eq":{},"user_packs":{},"attack_logs":[],"bot_country":None,"bot_last_action":None}
-    for k,v in {"users":{},"banned_users":[],"user_eq":{},"user_packs":{},"attack_logs":[],"bot_country":None,"bot_last_action":None,"daily_rewards":{},"coin_transfers":[]}.items():
-        if k not in d: d[k]=v
+    defaults={"users":{},"banned_users":[],"user_eq":{},"user_packs":{},"attack_logs":[],"bot_country":None,"bot_last_action":None,"daily_rewards":{},"coin_transfers":[],"businesses":{}}
+    for k,v in defaults.items():
+        if k not in d or d[k] is None:
+            d[k]=v.copy() if isinstance(v,dict) else list(v) if isinstance(v,list) else v
+    if not isinstance(d.get("users"),dict):
+        d["users"]={}
+    if not isinstance(d.get("user_eq"),dict):
+        d["user_eq"]={}
+    if not isinstance(d.get("user_packs"),dict):
+        d["user_packs"]={}
+    # Repair old/incomplete user records without changing existing values.
+    changed=False
+    for uid, user in d["users"].items():
+        if not isinstance(user,dict):
+            d["users"][uid]={"coins":0,"username":str(uid),"has_country":False,"faction":None}
+            changed=True
+        user=d["users"][uid]
+        for k,v in {"coins":0,"username":str(uid),"has_country":False,"faction":None,"daily_statements":{}}.items():
+            if k not in user:
+                user[k]=v.copy() if isinstance(v,dict) else v
+                changed=True
+        if not isinstance(d["user_eq"].get(uid),dict):
+            d["user_eq"][uid]={}; changed=True
+        if not isinstance(d["user_packs"].get(uid),list):
+            d["user_packs"][uid]=[]; changed=True
+    if changed:
+        save_data(d)
     return d
 def save_data(data):
+    """Persist game data and never silently hide write errors."""
     try:
-        with DATA_FILE.open('w',encoding='utf-8') as f: json.dump(data,f,indent=4,ensure_ascii=False)
-    except: pass
+        DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = DATA_FILE.with_suffix(DATA_FILE.suffix + ".tmp")
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+            f.flush()
+        tmp.replace(DATA_FILE)
+        return True
+    except Exception:
+        logger.exception("save_data failed")
+        return False
 
 def load_bot_status():
     d=safe_json_load(BOT_STATUS_FILE,{"online":True})
@@ -325,6 +408,62 @@ async def broadcast_war(bot,data,countries,attacker_uid,target,eq_name,amt,damag
         try: await bot.send_message(u,msg); await asyncio.sleep(0.05)
         except: pass
 
+# ---------- AI retaliation ----------
+async def bot_counterattack(bot, data, countries, bot_country, attacker_uid, incoming_damage):
+    """BOT_AI immediately retaliates against the country that attacked it."""
+    if bot_country not in countries or attacker_uid not in data.get("users", {}):
+        return
+    target_code = next((c for c, info in countries.items()
+                        if info.get("owner") == attacker_uid), None)
+    if not target_code:
+        return
+
+    bot_eq = data.setdefault("user_eq", {}).setdefault("BOT_AI", {})
+    available = [(name, int(cnt)) for name, cnt in bot_eq.items()
+                 if name in EQUIP and isinstance(cnt, (int, float)) and cnt > 0]
+    if not available:
+        return
+
+    eq_name, available_count = max(available, key=lambda x: EQUIP[x[0]][3])
+    amount = max(1, min(int(available_count),
+                        max(1, int(incoming_damage / max(1, EQUIP[eq_name][3])))))
+    retaliation_power = int(amount * EQUIP[eq_name][3] * 1.5)
+    damage = max(int(incoming_damage * 1.5), int(retaliation_power * 0.7))
+
+    bot_eq[eq_name] -= amount
+    if bot_eq[eq_name] <= 0:
+        del bot_eq[eq_name]
+
+    countries[target_code]["damage_taken"] = countries[target_code].get("damage_taken", 0) + damage
+    destroyed = False
+    if target_code != "US" and countries[target_code]["damage_taken"] >= 50000:
+        owner = countries[target_code].get("owner")
+        if owner in data.get("users", {}):
+            await destroy(bot, data, countries, target_code, owner)
+            destroyed = True
+
+    save_data(data)
+    save_countries(countries)
+
+    target_info = countries.get(target_code, {})
+    target_name = target_info.get("name", target_code)
+    extra = "\n☠️ کشور مهاجم نابود شد!" if destroyed else ""
+    msg = (f"🚨 {mh('ضدحمله ربات','🤖')}\n\n"
+           f"🤖 ربات به کشور {target_info.get('flag','🌍')} {target_name} ضدحمله کرد!\n"
+           f"💣 سلاح: {eq_name} × {fn(amount)}\n"
+           f"💥 خسارت ضدحمله: {fn(damage)}\n"
+           f"📊 خسارت کل کشور: {fn(countries[target_code].get('damage_taken', 0))}/۵۰,۰۰۰{extra}")
+    try:
+        await bot.send_message(attacker_uid, msg, chat_keypad=get_main_menu())
+    except Exception:
+        pass
+    for u in data.get("users", {}):
+        if str(u) != str(attacker_uid):
+            try:
+                await bot.send_message(u, msg)
+            except Exception:
+                pass
+
 # ---------- attack ----------
 async def do_attack(bot,cid,data,countries,uid,target,eq,amt):
     if amt<=0: return await bot.send_message(cid,"❌ تعداد باید مثبت باشد.")
@@ -393,6 +532,8 @@ async def do_attack(bot,cid,data,countries,uid,target,eq,amt):
         result = f"{mh('گزارش نبرد','⚔️')}\n\n🏆 پیروز شدید!\n\n🗡 {attacker_flag} {attacker_name}\n🎯 {target_flag} {target_name}\n💣 {eq} × {fn(used)}\n📦 موجودی: {fn(remaining)}\n⚔️ قدرت حمله: {fn(attack_power)}\n🛡 پدافند دشمن: {fn(tdef)}\n📊 شانس برد: {int(win_ch*100)}٪\n💥 خسارت: {fn(dmg)} (کل: {fn(countries[target].get('damage_taken',0))}/۵۰,۰۰۰)\n{loot_text}\n🪙 +۱۰۰ کوین\n🪙 موجودی: {fn(user_coins)}"
         await bot.send_message(cid, result, chat_keypad=get_main_menu())
         await broadcast_war(bot,data,countries,uid,target,eq,used,dmg,True,loot_text)
+        if towner == "BOT_AI":
+            await bot_counterattack(bot, data, countries, target, uid, dmg)
     else:
         dmg = int(attack_power*0.15)
         if countries[target].get("defense"): dmg = max(0,dmg-200)
@@ -410,6 +551,8 @@ async def do_attack(bot,cid,data,countries,uid,target,eq,amt):
         result = f"{mh('گزارش نبرد','⚔️')}\n\n💀 شکست خوردید!\n\n🗡 {attacker_flag} {attacker_name}\n🎯 {target_flag} {target_name}\n💣 {eq} × {fn(used)}\n📦 موجودی: {fn(remaining)}\n⚔️ قدرت حمله: {fn(attack_power)}\n🛡 پدافند دشمن: {fn(tdef)}\n📊 شانس برد: {int(win_ch*100)}٪\n💥 خسارت: {fn(dmg)} (کل: {fn(countries[target].get('damage_taken',0))}/۵۰,۰۰۰)\n{casualty}\n🪙 -۲۰ کوین\n🪙 موجودی: {fn(user_coins)}"
         await bot.send_message(cid, result, chat_keypad=get_main_menu())
         await broadcast_war(bot,data,countries,uid,target,eq,used,dmg,False,casualty)
+        if towner == "BOT_AI":
+            await bot_counterattack(bot, data, countries, target, uid, dmg)
 
 # ---------- daily reward / leave ----------
 async def daily(bot,cid,data,uid):
@@ -474,6 +617,23 @@ async def admin_reset_country(bot,cid,data,countries,country_code):
     save_data(data); save_countries(countries)
     await bot.send_message(cid,f"✅ کشور {info['flag']} {info['name']} کاملاً ریست شد.")
 
+
+# ---------- businesses ----------
+BUSINESSES = {
+    "shop": {"name":"🏪 فروشگاه", "cost":5000, "income":500},
+    "factory": {"name":"🏭 کارخانه", "cost":15000, "income":1800},
+    "oil": {"name":"🛢️ پالایشگاه", "cost":30000, "income":4000},
+}
+def business_menu_kb(data, uid):
+    b=ChatKeypadBuilder()
+    owned=data.get("businesses",{}).get(uid,{})
+    for key, info in BUSINESSES.items():
+        level=int(owned.get(key,0))
+        b.row(b.button(id=f"business_buy_{key}", text=f"{info['name']} Lv.{level} | {fn(info['cost'])} 🪙"))
+    b.row(b.button(id="business_collect", text="💰 دریافت درآمد"))
+    b.row(b.button(id="back_to_menu", text="🏠 بازگشت"))
+    return b.build(resize_keyboard=True,on_time_keyboard=True)
+
 # ---------- keyboards ----------
 def get_main_menu():
     b=ChatKeypadBuilder()
@@ -483,6 +643,7 @@ def get_main_menu():
     b.row(b.button(id="top_owners",text="🏆 رتبه‌بندی"),b.button(id="un_menu",text="🌐 سازمان ملل"))
     b.row(b.button(id="faction_menu",text="⚔️ گروهک‌ها"),b.button(id="daily_reward",text="🎁 پاداش روزانه"))
     b.row(b.button(id="alliance_menu",text="🤝 اتحادها"),b.button(id="leave_country",text="🚪 خروج از کشور"))
+    b.row(b.button(id="season_menu",text="🏆 فصل"))
     return b.build(resize_keyboard=True,on_time_keyboard=True)
 
 def get_alliance_menu(is_member,is_leader):
@@ -497,6 +658,7 @@ def get_alliance_menu(is_member,is_leader):
         b.row(b.button(id="alliance_betray",text="💀 خیانت"))
         if is_leader:
             b.row(b.button(id="alliance_manage",text="👥 مدیریت اعضا"))
+            b.row(b.button(id="alliance_manage2",text="⚙️ امکانات اتحاد"))
             b.row(b.button(id="alliance_disband",text="❌ انحلال"))
     b.row(b.button(id="back_to_menu",text="🏠 بازگشت"))
     return b.build(resize_keyboard=True,on_time_keyboard=True)
@@ -594,7 +756,7 @@ def get_single_eq_kb():
     for cat,items in cats.items():
         row=[]
         for eq,info in items[:4]:
-            row.append(b.button(id=f"buyeq_{eq}",text=f"{info[1]} {eq} | 🪙{info[0]}"))
+            row.append(b.button(id=f"buyeq_{eq}",text=f"{info[1]} {eq} | 🪙{fn(equip_price(eq))}"))
             if len(row)==3: b.row(*row); row=[]
         if row: b.row(*row)
     b.row(b.button(id="back_to_menu",text="🏠 بازگشت"))
@@ -603,7 +765,7 @@ def get_single_eq_kb():
 def get_shop_menu():
     b=ChatKeypadBuilder()
     for pn,pi in PACKS.items():
-        b.row(b.button(id=f"shop_{pn}",text=f"{pi[1]} {pn} | 💰{fn(pi[0])}"))
+        b.row(b.button(id=f"shop_{pn}",text=f"{pi[1]} {pn} | 💰{fn(pack_price(pn))}"))
     b.row(b.button(id="back_to_menu",text="🏠 بازگشت"))
     return b.build(resize_keyboard=True,on_time_keyboard=True)
 
@@ -630,7 +792,148 @@ def get_back():
 def get_cancel():
     b=ChatKeypadBuilder(); b.row(b.button(id="cancel",text="❌ لغو")); return b.build(resize_keyboard=True,on_time_keyboard=True)
 
+
+# ---------- season system ----------
+SEASON_DAYS = 30
+SEASON_FILE = BASE_DIR / "season.json"
+
+def load_season():
+    default = {
+        "number": 1,
+        "started_at": datetime.now().isoformat(),
+        "ends_at": (datetime.now() + timedelta(days=SEASON_DAYS)).isoformat(),
+        "history": []
+    }
+    d = safe_json_load(SEASON_FILE, default)
+    changed = False
+    for k, v in default.items():
+        if k not in d:
+            d[k] = v
+            changed = True
+    if changed:
+        save_season(d)
+    return d
+
+def save_season(s):
+    try:
+        with SEASON_FILE.open("w", encoding="utf-8") as f:
+            json.dump(s, f, indent=4, ensure_ascii=False)
+        return True
+    except Exception as e:
+        logger.error(f"save_season: {e}")
+        return False
+
+def season_score(data, countries, uid):
+    wins = 0
+    damage = 0
+    owned = 0
+    for info in countries.values():
+        if info.get("owner") == uid:
+            owned += 1
+            damage += int(info.get("damage_taken", 0))
+    for log in data.get("attack_logs", []):
+        if str(log.get("attacker")) == str(uid):
+            wins += int(log.get("damage", 0))
+    return owned * 10000 + wins + damage
+
+def season_status():
+    s = load_season()
+    try:
+        end = datetime.fromisoformat(s["ends_at"])
+        remaining = max(0, int((end - datetime.now()).total_seconds()))
+    except Exception:
+        remaining = 0
+    days, rem = divmod(remaining, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes = rem // 60
+    return s, f"{days} روز، {hours} ساعت و {minutes} دقیقه"
+
+async def finish_season(bot_instance, data, countries, s):
+    users = data.get("users", {})
+    ranking = []
+    for uid in users:
+        ranking.append((season_score(data, countries, uid), uid))
+    ranking.sort(reverse=True)
+
+    winners = []
+    for rank, (score, uid) in enumerate(ranking[:3], 1):
+        if uid in users:
+            reward = {1: 10000, 2: 6000, 3: 3000}[rank]
+            addc(data, uid, reward)
+            winners.append({
+                "rank": rank,
+                "uid": uid,
+                "username": users[uid].get("username", uid),
+                "score": score,
+                "reward": reward
+            })
+
+    s.setdefault("history", []).append({
+        "number": s["number"],
+        "ended_at": datetime.now().isoformat(),
+        "winners": winners
+    })
+    s["number"] += 1
+    s["started_at"] = datetime.now().isoformat()
+    s["ends_at"] = (datetime.now() + timedelta(days=SEASON_DAYS)).isoformat()
+    save_season(s)
+    save_data(data)
+
+    for uid in users:
+        try:
+            await bot_instance.send_message(
+                uid,
+                f"🏆 فصل {s['number']-1} به پایان رسید!\n"
+                + (f"🥇 نفر اول: {winners[0]['username']} — {winners[0]['reward']} کوین\n" if len(winners)>0 else "")
+                + (f"🥈 نفر دوم: {winners[1]['username']} — {winners[1]['reward']} کوین\n" if len(winners)>1 else "")
+                + (f"🥉 نفر سوم: {winners[2]['username']} — {winners[2]['reward']} کوین\n" if len(winners)>2 else "")
+                + f"\n🔥 فصل {s['number']} شروع شد!"
+            )
+        except Exception:
+            pass
+
+async def check_season(bot_instance, data, countries):
+    s = load_season()
+    try:
+        end = datetime.fromisoformat(s["ends_at"])
+    except Exception:
+        s["ends_at"] = (datetime.now() + timedelta(days=SEASON_DAYS)).isoformat()
+        save_season(s)
+        return s
+    if datetime.now() >= end:
+        await finish_season(bot_instance, data, countries, s)
+        s = load_season()
+    return s
+
+def get_season_kb():
+    b = ChatKeypadBuilder()
+    b.row(
+        b.button(id="season_info", text="🏆 فصل فعلی"),
+        b.button(id="season_top", text="🥇 رتبه فصل")
+    )
+    b.row(b.button(id="season_history", text="📜 فصل‌های قبل"))
+    b.row(b.button(id="back_to_menu", text="🏠 بازگشت"))
+    return b.build(resize_keyboard=True, on_time_keyboard=True)
+
+# ---------- advanced alliances ----------
+def alliance_power(data, adata, name):
+    a = adata.get("alliances", {}).get(name)
+    if not a:
+        return 0
+    return sum(power(data, uid) for uid in a.get("members", []))
+
+def get_alliance_manage_kb():
+    b = ChatKeypadBuilder()
+    b.row(b.button(id="alliance_invite", text="📨 دعوت عضو"))
+    b.row(b.button(id="alliance_kick", text="🚫 اخراج عضو"))
+    b.row(b.button(id="alliance_deputy", text="👑 تعیین معاون"))
+    b.row(b.button(id="alliance_treasury", text="💰 خزانه"))
+    b.row(b.button(id="alliance_back", text="🔙 اتحاد"))
+    return b.build(resize_keyboard=True, on_time_keyboard=True)
+
+
 # ---------- bot instance ----------
+load_season()
 bot = Robot(token=BOT_TOKEN)
 user_states={}
 admin_session={}
@@ -639,11 +942,15 @@ admin_session={}
 async def handler(bot_instance:Robot,msg:Message):
     global user_states,admin_session
     try:
-        cid=msg.chat_id
+        cid=str(msg.chat_id)
         text=msg.text.strip() if msg.text else ""
         cb=None
-        if hasattr(msg,'aux_data') and msg.aux_data:
-            cb=getattr(msg.aux_data,'button_id',None)
+        aux=getattr(msg,"aux_data",None)
+        if aux:
+            if isinstance(aux,dict):
+                cb=aux.get("button_id") or aux.get("buttonId") or aux.get("id")
+            else:
+                cb=getattr(aux,"button_id",None) or getattr(aux,"buttonId",None) or getattr(aux,"id",None)
     except Exception as e:
         logger.error(f"Error in handler initial block: {e}")
         return
@@ -658,6 +965,7 @@ async def handler(bot_instance:Robot,msg:Message):
         data=load_data()
         countries=load_countries()
         adata=load_alliance()
+        await check_season(bot_instance, data, countries)
         if uid in data.get("banned_users",[]):
             await msg.reply("🚫 مسدود هستید."); return
         username=guser(msg)
@@ -682,6 +990,78 @@ async def handler(bot_instance:Robot,msg:Message):
                 await bot_instance.send_message(cid,"❌ عملیات لغو شد.")
             user_states[cid]={}; return
 
+
+        # advanced alliance states
+        if user_states.get(cid, {}).get("alliance_invite"):
+            target = text.strip()
+            if target not in data.get("users", {}):
+                await bot_instance.send_message(cid, "❌ کاربر پیدا نشد!")
+            else:
+                name, a = get_al(adata, uid)
+                if not name or not is_leader(adata, uid):
+                    await bot_instance.send_message(cid, "❌ فقط لیدر می‌تواند دعوت کند.")
+                elif target in a["members"]:
+                    await bot_instance.send_message(cid, "⚠️ این کاربر عضو اتحاد است.")
+                else:
+                    adata.setdefault("pending_invites", {}).setdefault(target, [])
+                    if name not in adata["pending_invites"][target]:
+                        adata["pending_invites"][target].append(name)
+                        save_alliance(adata)
+                    await bot_instance.send_message(cid, "✅ دعوت ارسال شد.")
+                    try:
+                        await bot_instance.send_message(target, f"📨 از اتحاد «{name}» دعوت شدید. برای پذیرش از لیست دعوت‌ها استفاده کنید.")
+                    except Exception:
+                        pass
+            user_states[cid] = {}; return
+
+        if user_states.get(cid, {}).get("alliance_kick"):
+            target = text.strip()
+            name, a = get_al(adata, uid)
+            if not name or not is_leader(adata, uid):
+                await bot_instance.send_message(cid, "❌ فقط لیدر می‌تواند عضو اخراج کند.")
+            elif target not in a["members"]:
+                await bot_instance.send_message(cid, "❌ این کاربر عضو اتحاد نیست.")
+            elif target == uid:
+                await bot_instance.send_message(cid, "❌ لیدر نمی‌تواند خودش را اخراج کند.")
+            else:
+                a["members"].remove(target)
+                if adata["user_alliance"].get(target) == name:
+                    del adata["user_alliance"][target]
+                save_alliance(adata)
+                await bot_instance.send_message(cid, "✅ عضو از اتحاد اخراج شد.")
+            user_states[cid] = {}; return
+
+        if user_states.get(cid, {}).get("alliance_deputy"):
+            target = text.strip()
+            name, a = get_al(adata, uid)
+            if not name or not is_leader(adata, uid):
+                await bot_instance.send_message(cid, "❌ فقط لیدر می‌تواند معاون تعیین کند.")
+            elif target not in a["members"]:
+                await bot_instance.send_message(cid, "❌ کاربر عضو اتحاد نیست.")
+            else:
+                a["deputy"] = target
+                save_alliance(adata)
+                await bot_instance.send_message(cid, "👑 معاون اتحاد تعیین شد.")
+            user_states[cid] = {}; return
+
+        if user_states.get(cid, {}).get("alliance_deposit"):
+            try:
+                amount = int(text.strip())
+                if amount <= 0:
+                    raise ValueError
+                name, a = get_al(adata, uid)
+                ok, reason = remc(data, uid, amount)
+                if not ok:
+                    await bot_instance.send_message(cid, f"❌ {reason}")
+                else:
+                    a["treasury"] = int(a.get("treasury", 0)) + amount
+                    save_alliance(adata); save_data(data)
+                    await bot_instance.send_message(cid, f"✅ {amount:,} کوین به خزانه اتحاد اضافه شد.")
+            except Exception:
+                await bot_instance.send_message(cid, "❌ فقط یک عدد مثبت وارد کنید.")
+            user_states[cid] = {}; return
+
+
         # alliance creation / chat states
         if user_states.get(cid,{}).get("creating_alliance"):
             new_name=text.strip()
@@ -689,7 +1069,7 @@ async def handler(bot_instance:Robot,msg:Message):
             if new_name in adata["alliances"]: await bot_instance.send_message(cid,"❌ این نام قبلاً استفاده شده!"); user_states[cid]={}; return
             success,msg=remc(data,uid,5000)
             if not success: await bot_instance.send_message(cid,f"❌ {msg}"); user_states[cid]={}; return
-            adata["alliances"][new_name]={"leader":uid,"members":[uid],"created":datetime.now().isoformat()}
+            adata["alliances"][new_name]={"leader":uid,"deputy":None,"members":[uid],"treasury":0,"created":datetime.now().isoformat()}
             adata["user_alliance"][uid]=new_name
             save_alliance(adata); save_data(data)
             await bot_instance.send_message(cid,f"✅ اتحاد {new_name} ایجاد شد!",chat_keypad=get_main_menu())
@@ -769,61 +1149,104 @@ async def handler(bot_instance:Robot,msg:Message):
                 await bot_instance.send_message(cid,"🪙 شناسه و مقدار:",chat_keypad=get_admin_back_cancel()); return
             if user_states.get(cid,{}).get("add_coins"):
                 try:
-                    parts=text.split(); target=parts[0]; amt=int(parts[1])
-                    if amt<=0: await bot_instance.send_message(cid,"❌ مقدار باید مثبت باشد")
-                    elif target not in data["users"]: await bot_instance.send_message(cid,"❌ کاربر یافت نشد!")
-                    else: addc(data,target,amt); await bot_instance.send_message(cid,f"✅ {amt} کوین اضافه شد.")
-                except: await bot_instance.send_message(cid,"❌ فرمت اشتباه")
+                    parts=text.split()
+                    if len(parts)!=2: raise ValueError
+                    target=resolve_user_id(data,parts[0]); amt=int(parts[1])
+                    if not target: await bot_instance.send_message(cid,"❌ کاربر یافت نشد!")
+                    elif amt<=0: await bot_instance.send_message(cid,"❌ مقدار باید مثبت باشد")
+                    else:
+                        addc(data,target,amt)
+                        await bot_instance.send_message(cid,f"✅ {fn(amt)} کوین اضافه شد.\n🆔 `{target}`\n🪙 موجودی جدید: {fn(get_coins(data,target))}")
+                except (ValueError,TypeError):
+                    await bot_instance.send_message(cid,"❌ فرمت صحیح: شناسه/یوزرنیم مقدار")
+                except Exception:
+                    logger.exception("admin add coins failed")
+                    await bot_instance.send_message(cid,"❌ ذخیره کوین با خطا مواجه شد.")
                 user_states[cid]={}; return
             if cb=="ad_remove_coins":
                 user_states[cid]={"remove_coins":True}
                 await bot_instance.send_message(cid,"🪙 شناسه و مقدار:",chat_keypad=get_admin_back_cancel()); return
             if user_states.get(cid,{}).get("remove_coins"):
                 try:
-                    parts=text.split(); target=parts[0]; amt=int(parts[1])
-                    ok,msg=remc(data,target,amt)
-                    await bot_instance.send_message(cid,f"✅ {amt} کوین کم شد." if ok else f"❌ {msg}")
-                except: await bot_instance.send_message(cid,"❌ فرمت اشتباه")
+                    parts=text.split()
+                    if len(parts)!=2: raise ValueError
+                    target=resolve_user_id(data,parts[0]); amt=int(parts[1])
+                    if not target:
+                        await bot_instance.send_message(cid,"❌ کاربر یافت نشد!")
+                    else:
+                        ok,msg=remc(data,target,amt)
+                        await bot_instance.send_message(cid,f"✅ {fn(amt)} کوین کم شد.\n🆔 `{target}`\n🪙 موجودی جدید: {fn(get_coins(data,target))}" if ok else f"❌ {msg}")
+                except (ValueError,TypeError):
+                    await bot_instance.send_message(cid,"❌ فرمت صحیح: شناسه/یوزرنیم مقدار")
+                except Exception:
+                    logger.exception("admin remove coins failed")
+                    await bot_instance.send_message(cid,"❌ ذخیره کوین با خطا مواجه شد.")
                 user_states[cid]={}; return
             if cb=="ad_add_pack":
                 user_states[cid]={"add_pack":True}
                 await bot_instance.send_message(cid,f"🎁 شناسه و نام پک:\n{', '.join(PACKS.keys())}",chat_keypad=get_admin_back_cancel()); return
             if user_states.get(cid,{}).get("add_pack"):
                 try:
-                    parts=text.split(" ",1); target=parts[0]; pack_name=parts[1]
-                    if target not in data["users"]: await bot_instance.send_message(cid,"❌ کاربر یافت نشد!")
-                    elif pack_name not in PACKS: await bot_instance.send_message(cid,"❌ پک نامعتبر!")
+                    parts=text.split(maxsplit=1)
+                    if len(parts)!=2: raise ValueError
+                    target=resolve_user_id(data,parts[0]); pack_name=parts[1].strip()
+                    if not target: await bot_instance.send_message(cid,"❌ کاربر یافت نشد!")
+                    elif pack_name not in PACKS: await bot_instance.send_message(cid,f"❌ پک نامعتبر!\nپک‌های مجاز: {', '.join(PACKS.keys())}")
                     else:
-                        if "user_packs" not in data: data["user_packs"]={}
-                        if target not in data["user_packs"]: data["user_packs"][target]=[]
-                        if pack_name in data["user_packs"][target]: await bot_instance.send_message(cid,"⚠️ کاربر این پک را دارد!")
+                        data.setdefault("user_packs",{}).setdefault(target,[])
+                        if pack_name in data["user_packs"][target]:
+                            await bot_instance.send_message(cid,"⚠️ کاربر این پک را از قبل دارد.")
                         else:
                             data["user_packs"][target].append(pack_name)
-                            save_data(data)
-                            await bot_instance.send_message(cid,f"✅ پک {pack_name} اضافه شد.")
-                except: await bot_instance.send_message(cid,"❌ فرمت اشتباه")
+                            if not save_data(data):
+                                data["user_packs"][target].remove(pack_name)
+                                await bot_instance.send_message(cid,"❌ ذخیره پک انجام نشد.")
+                            else:
+                                await bot_instance.send_message(cid,f"✅ پک «{pack_name}» اضافه شد.\n📦 تعداد پک‌های کاربر: {len(data['user_packs'][target])}")
+                except ValueError:
+                    await bot_instance.send_message(cid,"❌ فرمت صحیح: شناسه/یوزرنیم نام پک")
+                except Exception:
+                    logger.exception("admin add pack failed")
+                    await bot_instance.send_message(cid,"❌ افزودن پک با خطا مواجه شد.")
                 user_states[cid]={}; return
             if cb=="ad_add_eq":
                 user_states[cid]={"add_eq":True}
                 await bot_instance.send_message(cid,"➕ شناسه، تجهیزات و تعداد:",chat_keypad=get_admin_back_cancel()); return
             if user_states.get(cid,{}).get("add_eq"):
                 try:
-                    parts=text.split(); target=parts[0]; eq_name=parts[1]; count=int(parts[2])
-                    if count<=0: await bot_instance.send_message(cid,"❌ تعداد باید مثبت باشد")
-                    elif target not in data["users"]: await bot_instance.send_message(cid,"❌ کاربر یافت نشد!")
-                    elif eq_name not in EQUIP: await bot_instance.send_message(cid,"❌ تجهیزات نامعتبر!")
-                    else: addeq(data,target,eq_name,count); await bot_instance.send_message(cid,f"✅ {count} {eq_name} اضافه شد.")
-                except: await bot_instance.send_message(cid,"❌ فرمت اشتباه")
+                    parts=text.split()
+                    if len(parts)<3: raise ValueError
+                    target=resolve_user_id(data,parts[0]); count=int(parts[-1]); eq_name=" ".join(parts[1:-1])
+                    if not target: await bot_instance.send_message(cid,"❌ کاربر یافت نشد!")
+                    elif count<=0: await bot_instance.send_message(cid,"❌ تعداد باید مثبت باشد")
+                    elif eq_name not in EQUIP: await bot_instance.send_message(cid,f"❌ تجهیزات نامعتبر: {eq_name}")
+                    else:
+                        addeq(data,target,eq_name,count)
+                        await bot_instance.send_message(cid,f"✅ {count} × {eq_name} اضافه شد.")
+                except ValueError:
+                    await bot_instance.send_message(cid,"❌ فرمت صحیح: شناسه/یوزرنیم نام‌تجهیزات تعداد")
+                except Exception:
+                    logger.exception("admin add equipment failed")
+                    await bot_instance.send_message(cid,"❌ افزودن تجهیزات با خطا مواجه شد.")
                 user_states[cid]={}; return
             if cb=="ad_remove_eq":
                 user_states[cid]={"remove_eq":True}
                 await bot_instance.send_message(cid,"➖ شناسه، تجهیزات و تعداد:",chat_keypad=get_admin_back_cancel()); return
             if user_states.get(cid,{}).get("remove_eq"):
                 try:
-                    parts=text.split(); target=parts[0]; eq_name=parts[1]; count=int(parts[2])
-                    ok,msg=remeq(data,target,eq_name,count)
-                    await bot_instance.send_message(cid,f"✅ {count} {eq_name} کم شد." if ok else f"❌ {msg}")
-                except: await bot_instance.send_message(cid,"❌ فرمت اشتباه")
+                    parts=text.split()
+                    if len(parts)<3: raise ValueError
+                    target=resolve_user_id(data,parts[0]); count=int(parts[-1]); eq_name=" ".join(parts[1:-1])
+                    if not target:
+                        await bot_instance.send_message(cid,"❌ کاربر یافت نشد!")
+                    else:
+                        ok,msg=remeq(data,target,eq_name,count)
+                        await bot_instance.send_message(cid,f"✅ {count} × {eq_name} کم شد." if ok else f"❌ {msg}")
+                except ValueError:
+                    await bot_instance.send_message(cid,"❌ فرمت صحیح: شناسه/یوزرنیم نام‌تجهیزات تعداد")
+                except Exception:
+                    logger.exception("admin remove equipment failed")
+                    await bot_instance.send_message(cid,"❌ حذف تجهیزات با خطا مواجه شد.")
                 user_states[cid]={}; return
             if cb=="ad_un_manage":
                 un=load_un()
@@ -880,11 +1303,128 @@ async def handler(bot_instance:Robot,msg:Message):
             fac=user.get("faction")
             fac_name=f"{FACTIONS[fac]['icon']} {FACTIONS[fac]['name']}" if fac and fac in FACTIONS else "❌ ندارد"
             aname,_=get_al(adata,uid); al_str=aname if aname else "❌ ندارد"
-            txt=f"👤 پروفایل\n🆔 {gid(msg,uid)}\n🔑 شناسه: {st(uid,'m')}\n🪙 کوین: {fn(user_coins)}\n⚔️ قدرت: {fn(pwr)}\n🌐 سازمان ملل: {un_status}\n⚔️ گروهک: {fac_name}\n🤝 اتحاد: {al_str}"
+            packs=data.get("user_packs",{}).get(uid,[])
+            pack_text=", ".join(packs) if packs else "❌ ندارد"
+            txt=f"👤 پروفایل\n🆔 {gid(msg,uid)}\n🔑 شناسه: {st(uid,'m')}\n🪙 کوین: {fn(user_coins)}\n⚔️ قدرت: {fn(pwr)}\n🌐 سازمان ملل: {un_status}\n⚔️ گروهک: {fac_name}\n🤝 اتحاد: {al_str}\n🎁 پک‌ها: {pack_text}"
             if my: txt+=f"\n🌍 کشور: {my['flag']} {my['name']}\n💥 خسارت: {fn(my.get('damage_taken',0))}/۵۰,۰۰۰"
             await bot_instance.send_message(cid,txt); return
+
+
+        if cb=="business_menu":
+            owned=data.get("businesses",{}).get(uid,{})
+            total=sum(int(owned.get(k,0))*v["income"] for k,v in BUSINESSES.items())
+            await bot_instance.send_message(
+                cid,
+                f"💼 کسب‌وکارهای شما\n\n💰 درآمد هر دریافت: {fn(total)} کوین",
+                chat_keypad=business_menu_kb(data,uid)
+            ); return
+
+        if cb and cb.startswith("business_buy_"):
+            key=cb.replace("business_buy_","",1)
+            if key not in BUSINESSES:
+                await bot_instance.send_message(cid,"❌ کسب‌وکار نامعتبر!"); return
+            info=BUSINESSES[key]
+            owned=data.setdefault("businesses",{}).setdefault(uid,{})
+            current=int(owned.get(key,0))
+            cost=info["cost"]*(current+1)
+            ok,msg=remc(data,uid,cost)
+            if not ok:
+                await bot_instance.send_message(cid,f"❌ کوین کافی نیست.\n💰 هزینه: {fn(cost)}")
+            else:
+                owned[key]=current+1
+                save_data(data)
+                await bot_instance.send_message(
+                    cid,
+                    f"✅ {info['name']} به سطح {current+1} رسید!\n💸 هزینه: {fn(cost)}",
+                    chat_keypad=business_menu_kb(data,uid)
+                )
+            return
+
+        if cb=="business_collect":
+            owned=data.get("businesses",{}).get(uid,{})
+            total=sum(int(owned.get(k,0))*v["income"] for k,v in BUSINESSES.items())
+            if total<=0:
+                await bot_instance.send_message(cid,"❌ هنوز کسب‌وکاری ندارید.",chat_keypad=business_menu_kb(data,uid))
+            else:
+                addc(data,uid,total)
+                await bot_instance.send_message(
+                    cid,
+                    f"💰 {fn(total)} کوین دریافت کردید!\n🪙 موجودی: {fn(get_coins(data,uid))}",
+                    chat_keypad=business_menu_kb(data,uid)
+                )
+            return
+
+        if cb=="season_menu":
+            s, remaining = season_status()
+            await bot_instance.send_message(cid,
+                f"🏆 فصل {s['number']}\n\n⏳ زمان باقی‌مانده: {remaining}\n📅 شروع: {s['started_at'][:19].replace('T',' ')}\n📅 پایان: {s['ends_at'][:19].replace('T',' ')}",
+                chat_keypad=get_season_kb())
+            return
+
+        if cb=="season_info":
+            s, remaining = season_status()
+            await bot_instance.send_message(cid, f"🏆 فصل {s['number']}\n⏳ {remaining}", chat_keypad=get_season_kb()); return
+
+        if cb=="season_top":
+            s = load_season()
+            rows = sorted(
+                [(season_score(data, countries, u), u) for u in data.get("users", {})],
+                reverse=True
+            )[:10]
+            txt = f"🥇 رتبه فصل {s['number']}:\n\n"
+            for i, (score, u) in enumerate(rows, 1):
+                txt += f"{i}. {data['users'][u].get('username',u[:10])} — {score:,}\n"
+            await bot_instance.send_message(cid, txt, chat_keypad=get_season_kb()); return
+
+        if cb=="season_history":
+            s = load_season()
+            hist = s.get("history", [])[-10:][::-1]
+            if not hist:
+                txt = "📜 هنوز فصلی تمام نشده است."
+            else:
+                txt = "📜 فصل‌های گذشته:\n\n"
+                for h in hist:
+                    txt += f"🏆 فصل {h.get('number','?')}\n"
+                    for w in h.get("winners", []):
+                        txt += f"  {w['rank']}. {w['username']} — {w['reward']:,} 🪙\n"
+            await bot_instance.send_message(cid, txt, chat_keypad=get_season_kb()); return
+
+        if cb=="alliance_manage2":
+            name, a = get_al(adata, uid)
+            if not name or not is_leader(adata, uid):
+                await bot_instance.send_message(cid, "❌ فقط لیدر اتحاد.")
+            else:
+                await bot_instance.send_message(
+                    cid,
+                    f"⚙️ مدیریت اتحاد «{name}»\n"
+                    f"👥 اعضا: {len(a.get('members',[]))}\n"
+                    f"💰 خزانه: {a.get('treasury',0):,}",
+                    chat_keypad=get_alliance_manage_kb()
+                )
+            return
+
+        if cb=="alliance_invite":
+            user_states[cid]={"alliance_invite":True}
+            await bot_instance.send_message(cid,"📨 شناسه کاربر برای دعوت:",chat_keypad=get_cancel()); return
+
+        if cb=="alliance_kick":
+            user_states[cid]={"alliance_kick":True}
+            await bot_instance.send_message(cid,"🚫 شناسه کاربر برای اخراج:",chat_keypad=get_cancel()); return
+
+        if cb=="alliance_deputy":
+            user_states[cid]={"alliance_deputy":True}
+            await bot_instance.send_message(cid,"👑 شناسه کاربر برای معاونت:",chat_keypad=get_cancel()); return
+
+        if cb=="alliance_treasury":
+            user_states[cid]={"alliance_deposit":True}
+            await bot_instance.send_message(cid,"💰 مقدار کوین برای واریز به خزانه:",chat_keypad=get_cancel()); return
+
+        if cb=="alliance_back":
+            name, a = get_al(adata, uid)
+            await bot_instance.send_message(cid, "🤝 اتحاد", chat_keypad=get_alliance_menu(bool(name), is_leader(adata,uid))); return
+
         if cb=="alliance_menu":
-            name,_=get_al(adata,uid); is_member=name is not None; is_leader=is_leader(adata,uid)
+            name,_=get_al(adata,uid); is_member=name is not None; leader_status=is_leader(adata,uid)
             traitor=adata["traitor_until"].get(uid)
             if traitor:
                 try:
@@ -894,7 +1434,7 @@ async def handler(bot_instance:Robot,msg:Message):
                         await bot_instance.send_message(cid,f"⛔ به دلیل خیانت تا {h} ساعت نمی‌توانید عضو اتحاد شوید.",chat_keypad=get_main_menu()); return
                     else: del adata["traitor_until"][uid]; save_alliance(adata)
                 except: pass
-            await bot_instance.send_message(cid,"🤝 منوی اتحادها",chat_keypad=get_alliance_menu(is_member,is_leader)); return
+            await bot_instance.send_message(cid,"🤝 منوی اتحادها",chat_keypad=get_alliance_menu(is_member,leader_status)); return
         if cb=="alliance_create":
             if get_al(adata,uid)[0]: return await bot_instance.send_message(cid,"❌ شما قبلاً عضو یک اتحاد هستید!")
             if not any(i.get("owner")==uid for i in countries.values()): return await bot_instance.send_message(cid,"❌ برای ایجاد اتحاد باید کشور داشته باشید!")
@@ -903,12 +1443,19 @@ async def handler(bot_instance:Robot,msg:Message):
             await bot_instance.send_message(cid,"📝 نام اتحاد جدید را وارد کنید:",chat_keypad=get_cancel()); return
         if cb=="alliance_list":
             alliances=adata["alliances"]
-            if not alliances: return await bot_instance.send_message(cid,"📋 هیچ اتحادی وجود ندارد.")
+            if not alliances:
+                return await bot_instance.send_message(cid,"📋 هیچ اتحادی وجود ندارد.",chat_keypad=get_alliance_menu(False,False))
             txt="📋 اتحادهای موجود:\n"
+            builder=ChatKeypadBuilder()
             for i,(a_name,a_info) in enumerate(alliances.items(),1):
-                leader_name=data["users"].get(a_info["leader"],{}).get("username","نامشخص")
-                txt+=f"\n{i}. {a_name} (رهبر: {leader_name}, اعضا: {len(a_info['members'])})"
-            await bot_instance.send_message(cid,txt); return
+                leader_name=data["users"].get(a_info.get("leader"),{}).get("username","نامشخص")
+                members=a_info.get("members",[])
+                txt+=f"\n{i}. {a_name} (رهبر: {leader_name}, اعضا: {len(members)})"
+                if not get_al(adata,uid)[0] and uid not in members:
+                    builder.row(builder.button(id=f"join_alliance_{a_name}",text=f"🤝 عضویت در {a_name}"))
+            builder.row(builder.button(id="back_to_menu",text="🏠 بازگشت"))
+            await bot_instance.send_message(cid,txt,chat_keypad=builder.build(resize_keyboard=True,on_time_keyboard=True))
+            return
         if cb and cb.startswith("join_alliance_"):
             a_name=cb.replace("join_alliance_","")
             if a_name not in adata["alliances"]: return await bot_instance.send_message(cid,"❌ اتحاد یافت نشد.")
@@ -917,13 +1464,24 @@ async def handler(bot_instance:Robot,msg:Message):
                 try:
                     until=datetime.fromisoformat(adata["traitor_until"][uid])
                     if datetime.now()<until: return await bot_instance.send_message(cid,"⛔ به دلیل خیانت نمی‌توانید عضو شوید.")
-                    else: del adata["traitor_until"][uid]
-                except: pass
+                    else:
+                        del adata["traitor_until"][uid]
+                        save_alliance(adata)
+                except Exception:
+                    adata["traitor_until"].pop(uid,None)
+                    save_alliance(adata)
             if not any(i.get("owner")==uid for i in countries.values()): return await bot_instance.send_message(cid,"❌ برای پیوستن باید کشور داشته باشید!")
             if uid in adata["alliances"][a_name]["members"]: return await bot_instance.send_message(cid,"⚠️ شما قبلاً عضو این اتحاد هستید!")
-            adata["alliances"][a_name]["members"].append(uid)
-            adata["user_alliance"][uid]=a_name; save_alliance(adata)
-            await bot_instance.send_message(cid,f"✅ شما به اتحاد {a_name} پیوستید!",chat_keypad=get_main_menu())
+            alliance = adata["alliances"][a_name]
+            alliance.setdefault("members", [])
+            alliance["members"].append(uid)
+            adata.setdefault("user_alliance", {})[uid]=a_name
+            if not save_alliance(adata):
+                alliance["members"].remove(uid)
+                adata["user_alliance"].pop(uid, None)
+                await bot_instance.send_message(cid,"❌ ذخیره عضویت انجام نشد؛ اطلاعات شما تغییر نکرد.")
+                return
+            await bot_instance.send_message(cid,f"✅ شما به اتحاد «{a_name}» پیوستید!",chat_keypad=get_main_menu())
             try: await bot_instance.send_message(adata["alliances"][a_name]["leader"],f"👤 {username or uid} به اتحاد شما پیوست!")
             except: pass
             return
@@ -1060,7 +1618,7 @@ async def handler(bot_instance:Robot,msg:Message):
         if cb and cb.startswith("buyeq_"):
             eq_name=cb.replace("buyeq_","")
             if eq_name not in EQUIP: return await bot_instance.send_message(cid,"❌ نامعتبر!")
-            price=EQUIP[eq_name][0]; user_coins=get_coins(data,uid)
+            price=equip_price(eq_name); user_coins=get_coins(data,uid)
             if user_coins<price: return await bot_instance.send_message(cid,f"❌ کوین کافی نیست! ({fn(price)})")
             data["users"][uid]["coins"]=user_coins-price; addeq(data,uid,eq_name,1); save_data(data)
             await bot_instance.send_message(cid,f"✅ {eq_name} خریداری شد!",chat_keypad=get_single_eq_kb()); return
@@ -1079,7 +1637,7 @@ async def handler(bot_instance:Robot,msg:Message):
                 today=date.today().isoformat()
                 data["users"][uid].setdefault("daily_statements",{})
                 cnt=data["users"][uid]["daily_statements"].get(today,0)
-                if cnt>=20: return await bot_instance.send_message(cid,"❌ محدودیت ۲۰ بیانیه!")
+                if cnt>=30: return await bot_instance.send_message(cid,"❌ محدودیت ۳۰ بیانیه!")
                 data["users"][uid]["daily_statements"][today]=cnt+1
                 addc(data,uid,50); save_data(data)
                 full_id=gid(msg,uid)
