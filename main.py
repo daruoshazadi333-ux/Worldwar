@@ -1,4 +1,4 @@
-import asyncio, json, random, logging, traceback, sys, time
+import asyncio, json, random, logging, traceback, time
 from pathlib import Path
 from datetime import datetime, date, timedelta
 from os import system as os_system, name as os_name
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 # ---------- config ----------
 BOT_TOKEN = "BHJEGG0LZYHJRDVYGAQUHCZXQLNBOMCRDTAWBRSPVRGVDOHEJZIZOOXSYIXOEEOK"
-ADMINS = [admin for admin in ["", "b0IHXHW0nOE0346b7cf8cf9382619504"] if admin]
+ADMINS = [admin for admin in ["b0IHXHW0ZiA04b38619deee0de232fe7", "b0IHXHW0nOE0346b7cf8cf9382619504"] if admin]
 ADMIN_PASSWORD = "admin090hk989897877"
 ADMIN_USERNAME = "@admin10blue"
 DATA_FILE = Path("worldwar_data.json")
@@ -29,6 +29,23 @@ ALLIANCE_FILE = Path("alliance_data.json")
 BOT_STATUS_FILE = Path("bot_status.json")
 
 F = {"b":"**","i":"_","m":"`","l":"▬"*30,"a":"➤","s":"★","f":"🔥","c":"♛","sh":"🛡","sw":"⚔","co":"🪙","d":"◆","ch":"✅","cr":"❌","sk":"💀","t":"🏆","g":"🌐","bo":"💥","h":"🤝","be":"🗡️"}
+
+MAX_WARNINGS = 3
+RULES_TEXT = (
+    "📜 قوانین جنگ جهانی\n\n"
+    "⚠️ هر فحش یا توهین = ۱ اخطار.\n"
+    "🔴 مجموع اخطارها حداکثر ۳ عدد است.\n"
+    "🚫 با رسیدن به ۳ اخطار، کشور شما ریست و حساب شما مسدود می‌شود.\n"
+    "💰 پول پرداخت‌شده برای پک‌ها و خریدها به هیچ عنوان پس داده نمی‌شود.\n"
+    "⚔️ سوءاستفاده از باگ، اسپم و ایجاد مزاحمت نیز می‌تواند اخطار داشته باشد.\n"
+    "🛡️ قوانین برای همه کاربران یکسان است."
+)
+# واژه‌های پایه برای تشخیص توهین؛ فهرست عمداً کوتاه نگه داشته شده تا خطای تشخیص کم شود.
+BAD_WORDS = {
+    "احمق","بی شعور","بی‌شعور","کسخل","کودن","نفهم","حرومزاده","حرامزاده",
+    "گمشو","دهنتو ببند","خفه شو","عوضی","فحش","fuck","shit"
+}
+
 
 COUNTRIES = [
     {"code":"US","flag":"🇺🇸","name":"آمریکا","emoji":"🦅","bonus":500},
@@ -64,6 +81,123 @@ COUNTRIES = [
     {"code":"PS","flag":"🇵🇸","name":"فلسطین","emoji":"🕊","bonus":200},
     {"code":"ZA","flag":"🇿🇦","name":"آفریقای جنوبی","emoji":"🦁","bonus":200},
     {"code":"IQ","flag":"🇮🇶","name":"عراق","emoji":"🏛","bonus":200},
+    {"code":"AU","flag":"🇦🇺","name":"استرالیا","emoji":"🦘","bonus":350},
+    {"code":"NZ","flag":"🇳🇿","name":"نیوزیلند","emoji":"🥝","bonus":220},
+    {"code":"MX","flag":"🇲🇽","name":"مکزیک","emoji":"🌵","bonus":280},
+    {"code":"AR","flag":"🇦🇷","name":"آرژانتین","emoji":"⚽","bonus":320},
+    {"code":"CL","flag":"🇨🇱","name":"شیلی","emoji":"🏔","bonus":220},
+    {"code":"CO","flag":"🇨🇴","name":"کلمبیا","emoji":"☕","bonus":240},
+    {"code":"PE","flag":"🇵🇪","name":"پرو","emoji":"🦙","bonus":210},
+    {"code":"UY","flag":"🇺🇾","name":"اروگوئه","emoji":"⚽","bonus":190},
+    {"code":"PY","flag":"🇵🇾","name":"پاراگوئه","emoji":"🌿","bonus":160},
+    {"code":"BO","flag":"🇧🇴","name":"بولیوی","emoji":"⛰️","bonus":150},
+    {"code":"EC","flag":"🇪🇨","name":"اکوادور","emoji":"🌋","bonus":170},
+    {"code":"GY","flag":"🇬🇾","name":"گویان","emoji":"🌴","bonus":130},
+    {"code":"SR","flag":"🇸🇷","name":"سورینام","emoji":"🌳","bonus":120},
+    {"code":"FJ","flag":"🇫🇯","name":"فیجی","emoji":"🌴","bonus":100},
+    {"code":"PT","flag":"🇵🇹","name":"پرتغال","emoji":"⚓","bonus":280},
+    {"code":"IE","flag":"🇮🇪","name":"ایرلند","emoji":"☘️","bonus":210},
+    {"code":"IS","flag":"🇮🇸","name":"ایسلند","emoji":"❄️","bonus":180},
+    {"code":"SE","flag":"🇸🇪","name":"سوئد","emoji":"🛡️","bonus":260},
+    {"code":"FI","flag":"🇫🇮","name":"فنلاند","emoji":"❄️","bonus":240},
+    {"code":"DK","flag":"🇩🇰","name":"دانمارک","emoji":"⚔️","bonus":230},
+    {"code":"PL","flag":"🇵🇱","name":"لهستان","emoji":"🦅","bonus":260},
+    {"code":"CZ","flag":"🇨🇿","name":"چک","emoji":"🏰","bonus":210},
+    {"code":"SK","flag":"🇸🇰","name":"اسلواکی","emoji":"🏔","bonus":160},
+    {"code":"HU","flag":"🇭🇺","name":"مجارستان","emoji":"🦅","bonus":190},
+    {"code":"RO","flag":"🇷🇴","name":"رومانی","emoji":"🏰","bonus":200},
+    {"code":"BG","flag":"🇧🇬","name":"بلغارستان","emoji":"🌹","bonus":170},
+    {"code":"RS","flag":"🇷🇸","name":"صربستان","emoji":"🦅","bonus":180},
+    {"code":"HR","flag":"🇭🇷","name":"کرواسی","emoji":"♟️","bonus":200},
+    {"code":"HT","flag":"🇭🇹","name":"هائیتی","emoji":"🌴","bonus":110},
+    {"code":"SI","flag":"🇸🇮","name":"اسلوونی","emoji":"🏔","bonus":150},
+    {"code":"AL","flag":"🇦🇱","name":"آلبانی","emoji":"🦅","bonus":140},
+    {"code":"DO","flag":"🇩🇴","name":"جمهوری دومینیکن","emoji":"🌴","bonus":140},
+    {"code":"TT","flag":"🇹🇹","name":"ترینیداد و توباگو","emoji":"🌊","bonus":110},
+    {"code":"JM","flag":"🇯🇲","name":"جامائیکا","emoji":"🎵","bonus":130},
+    {"code":"UA","flag":"🇺🇦","name":"اوکراین","emoji":"🌾","bonus":280},
+    {"code":"BY","flag":"🇧🇾","name":"بلاروس","emoji":"🌲","bonus":190},
+    {"code":"MD","flag":"🇲🇩","name":"مولداوی","emoji":"🍇","bonus":130},
+    {"code":"LT","flag":"🇱🇹","name":"لیتوانی","emoji":"🌲","bonus":150},
+    {"code":"LV","flag":"🇱🇻","name":"لتونی","emoji":"🌲","bonus":145},
+    {"code":"EE","flag":"🇪🇪","name":"استونی","emoji":"💻","bonus":150},
+    {"code":"GE","flag":"🇬🇪","name":"گرجستان","emoji":"🍇","bonus":170},
+    {"code":"AM","flag":"🇦🇲","name":"ارمنستان","emoji":"⛰️","bonus":140},
+    {"code":"AZ","flag":"🇦🇿","name":"آذربایجان","emoji":"🔥","bonus":190},
+    {"code":"KZ","flag":"🇰🇿","name":"قزاقستان","emoji":"🐎","bonus":240},
+    {"code":"UZ","flag":"🇺🇿","name":"ازبکستان","emoji":"🏜️","bonus":190},
+    {"code":"TM","flag":"🇹🇲","name":"ترکمنستان","emoji":"🐎","bonus":150},
+    {"code":"KG","flag":"🇰🇬","name":"قرقیزستان","emoji":"🏔","bonus":140},
+    {"code":"TJ","flag":"🇹🇯","name":"تاجیکستان","emoji":"⛰️","bonus":140},
+    {"code":"MN","flag":"🇲🇳","name":"مغولستان","emoji":"🐎","bonus":180},
+    {"code":"AF","flag":"🇦🇫","name":"افغانستان","emoji":"🏔","bonus":170},
+    {"code":"BD","flag":"🇧🇩","name":"بنگلادش","emoji":"🌊","bonus":180},
+    {"code":"LK","flag":"🇱🇰","name":"سریلانکا","emoji":"🌴","bonus":170},
+    {"code":"NP","flag":"🇳🇵","name":"نپال","emoji":"🏔","bonus":180},
+    {"code":"BT","flag":"🇧🇹","name":"بوتان","emoji":"🐉","bonus":110},
+    {"code":"MM","flag":"🇲🇲","name":"میانمار","emoji":"🌴","bonus":150},
+    {"code":"TH","flag":"🇹🇭","name":"تایلند","emoji":"🐘","bonus":220},
+    {"code":"MY","flag":"🇲🇾","name":"مالزی","emoji":"🌴","bonus":230},
+    {"code":"SG","flag":"🇸🇬","name":"سنگاپور","emoji":"🏙️","bonus":300},
+    {"code":"ID","flag":"🇮🇩","name":"اندونزی","emoji":"🌋","bonus":240},
+    {"code":"PH","flag":"🇵🇭","name":"فیلیپین","emoji":"🌊","bonus":200},
+    {"code":"KH","flag":"🇰🇭","name":"کامبوج","emoji":"🏯","bonus":130},
+    {"code":"LA","flag":"🇱🇦","name":"لائوس","emoji":"🌿","bonus":120},
+    {"code":"BN","flag":"🇧🇳","name":"برونئی","emoji":"🛢️","bonus":150},
+    {"code":"TL","flag":"🇹🇱","name":"تیمور شرقی","emoji":"🌊","bonus":100},
+    {"code":"WS","flag":"🇼🇸","name":"ساموآ","emoji":"🌴","bonus":100},
+    {"code":"QA","flag":"🇶🇦","name":"قطر","emoji":"🏙️","bonus":280},
+    {"code":"KW","flag":"🇰🇼","name":"کویت","emoji":"🛢️","bonus":260},
+    {"code":"BH","flag":"🇧🇭","name":"بحرین","emoji":"🌊","bonus":200},
+    {"code":"OM","flag":"🇴🇲","name":"عمان","emoji":"🏜️","bonus":220},
+    {"code":"YE","flag":"🇾🇪","name":"یمن","emoji":"🏔","bonus":130},
+    {"code":"JO","flag":"🇯🇴","name":"اردن","emoji":"🏜️","bonus":180},
+    {"code":"TO","flag":"🇹🇴","name":"تونگا","emoji":"🌊","bonus":95},
+    {"code":"MA","flag":"🇲🇦","name":"مراکش","emoji":"🕌","bonus":230},
+    {"code":"DZ","flag":"🇩🇿","name":"الجزایر","emoji":"🏜️","bonus":230},
+    {"code":"TN","flag":"🇹🇳","name":"تونس","emoji":"🏺","bonus":180},
+    {"code":"LY","flag":"🇱🇾","name":"لیبی","emoji":"🛢️","bonus":160},
+    {"code":"SD","flag":"🇸🇩","name":"سودان","emoji":"🌾","bonus":140},
+    {"code":"SS","flag":"🇸🇸","name":"سودان جنوبی","emoji":"🌿","bonus":120},
+    {"code":"SO","flag":"🇸🇴","name":"سومالی","emoji":"🏜️","bonus":120},
+    {"code":"DJ","flag":"🇩🇯","name":"جیبوتی","emoji":"⚓","bonus":100},
+    {"code":"ER","flag":"🇪🇷","name":"اریتره","emoji":"🏜️","bonus":110},
+    {"code":"KE","flag":"🇰🇪","name":"کنیا","emoji":"🦁","bonus":180},
+    {"code":"TZ","flag":"🇹🇿","name":"تانزانیا","emoji":"🦒","bonus":170},
+    {"code":"UG","flag":"🇺🇬","name":"اوگاندا","emoji":"🦍","bonus":140},
+    {"code":"RW","flag":"🇷🇼","name":"رواندا","emoji":"🌋","bonus":120},
+    {"code":"GH","flag":"🇬🇭","name":"غنا","emoji":"⭐","bonus":160},
+    {"code":"NG","flag":"🇳🇬","name":"نیجریه","emoji":"🦅","bonus":240},
+    {"code":"CM","flag":"🇨🇲","name":"کامرون","emoji":"🦁","bonus":130},
+    {"code":"SN","flag":"🇸🇳","name":"سنگال","emoji":"🦁","bonus":140},
+    {"code":"CI","flag":"🇨🇮","name":"ساحل عاج","emoji":"🐘","bonus":150},
+    {"code":"ML","flag":"🇲🇱","name":"مالی","emoji":"🏜️","bonus":120},
+    {"code":"NE","flag":"🇳🇪","name":"نیجر","emoji":"🏜️","bonus":110},
+    {"code":"MR","flag":"🇲🇷","name":"موریتانی","emoji":"🐪","bonus":110},
+    {"code":"ZW","flag":"🇿🇼","name":"زیمبابوه","emoji":"🦁","bonus":130},
+    {"code":"ZM","flag":"🇿🇲","name":"زامبیا","emoji":"🦅","bonus":120},
+    {"code":"MZ","flag":"🇲🇿","name":"موزامبیک","emoji":"🌊","bonus":130},
+    {"code":"AO","flag":"🇦🇴","name":"آنگولا","emoji":"🛢️","bonus":170},
+    {"code":"NA","flag":"🇳🇦","name":"نامیبیا","emoji":"🏜️","bonus":120},
+    {"code":"BW","flag":"🇧🇼","name":"بوتسوانا","emoji":"🐘","bonus":110},
+    {"code":"MG","flag":"🇲🇬","name":"ماداگاسکار","emoji":"🌴","bonus":120},
+    {"code":"MU","flag":"🇲🇺","name":"موریس","emoji":"🌊","bonus":100},
+    {"code":"SC","flag":"🇸🇨","name":"سیشل","emoji":"🌊","bonus":100},
+    {"code":"CD","flag":"🇨🇩","name":"کنگو","emoji":"🌳","bonus":150},
+    {"code":"CG","flag":"🇨🇬","name":"کنگو برازاویل","emoji":"🌳","bonus":130},
+    {"code":"GA","flag":"🇬🇦","name":"گابن","emoji":"🌳","bonus":120},
+    {"code":"GQ","flag":"🇬🇶","name":"گینه استوایی","emoji":"🛢️","bonus":120},
+    {"code":"VU","flag":"🇻🇺","name":"وانواتو","emoji":"🌋","bonus":95},
+    {"code":"BJ","flag":"🇧🇯","name":"بنین","emoji":"🌴","bonus":110},
+    {"code":"TG","flag":"🇹🇬","name":"توگو","emoji":"🌴","bonus":105},
+    {"code":"BF","flag":"🇧🇫","name":"بورکینافاسو","emoji":"🏜️","bonus":110},
+    {"code":"GN","flag":"🇬🇳","name":"گینه","emoji":"🌿","bonus":110},
+    {"code":"SL","flag":"🇸🇱","name":"سیرالئون","emoji":"🌊","bonus":100},
+    {"code":"LR","flag":"🇱🇷","name":"لیبریا","emoji":"🌴","bonus":100},
+    {"code":"CV","flag":"🇨🇻","name":"کیپ ورد","emoji":"🌊","bonus":95},
+    {"code":"GM","flag":"🇬🇲","name":"گامبیا","emoji":"🌊","bonus":95},
+    {"code":"BI","flag":"🇧🇮","name":"بوروندی","emoji":"🌿","bonus":100},
+    {"code":"MW","flag":"🇲🇼","name":"مالاوی","emoji":"🌿","bonus":100},
 ]
 
 FACTIONS = {
@@ -195,6 +329,75 @@ def consume(data,uid,eq,amt):
     save_data(data)
     return amt,True
 
+
+def warning_count(data, uid):
+    return int(data.get("users", {}).get(uid, {}).get("warnings", 0))
+
+def set_warnings(data, uid, count):
+    if uid in data.get("users", {}):
+        data["users"][uid]["warnings"] = max(0, min(MAX_WARNINGS, int(count)))
+        save_data(data)
+
+async def issue_warning(bot, data, countries, uid, reason="تخلف از قوانین", notify=True):
+    """یک اخطار ثبت می‌کند؛ اخطار سوم = ریست کشور + مسدودی."""
+    if uid not in data.get("users", {}) or uid in ADMINS:
+        return False
+    user = data["users"][uid]
+    count = warning_count(data, uid) + 1
+    user["warnings"] = count
+    user.setdefault("warning_log", []).append({
+        "reason": reason, "time": datetime.now().isoformat()
+    })
+    if len(user["warning_log"]) > 20:
+        user["warning_log"] = user["warning_log"][-20:]
+    save_data(data)
+    if count >= MAX_WARNINGS:
+        my = next((code for code, info in countries.items() if info.get("owner") == uid), None)
+        if my:
+            info = countries[my]
+            info["owner"] = None
+            info["defense"] = False
+            info["damage_taken"] = 0
+        user["has_country"] = False
+        user["coins"] = 0
+        user["faction"] = None
+        data.setdefault("user_eq", {})[uid] = {}
+        data.setdefault("user_packs", {})[uid] = []
+        data.setdefault("banned_users", [])
+        if uid not in data["banned_users"]:
+            data["banned_users"].append(uid)
+        save_data(data)
+        save_countries(countries)
+        if notify:
+            try:
+                await bot.send_message(uid,
+                    "🚫 اخطار سوم ثبت شد.\n"
+                    "💥 کشور شما ریست شد.\n"
+                    "🔒 حساب شما مسدود شد.\n\n"
+                    "💰 مبالغ پرداخت‌شده برای پک‌ها و خریدها قابل استرداد نیستند.")
+            except Exception:
+                pass
+        return True
+    if notify:
+        try:
+            await bot.send_message(uid,
+                f"⚠️ اخطار شماره {count}/{MAX_WARNINGS}\n"
+                f"📌 دلیل: {reason}\n"
+                f"🔴 اخطار سوم باعث ریست کشور و مسدودی می‌شود.")
+        except Exception:
+            pass
+    return True
+
+def contains_bad_word(text):
+    t = (text or "").strip().lower()
+    return any(w in t for w in BAD_WORDS)
+
+def get_rules_menu():
+    b = ChatKeypadBuilder()
+    b.row(b.button(id="rules", text="📜 قوانین"))
+    b.row(b.button(id="back_to_menu", text="🏠 بازگشت"))
+    return b.build(resize_keyboard=True, on_time_keyboard=True)
+
 # ---------- alliances ----------
 def load_alliance():
     try:
@@ -237,8 +440,9 @@ def load_countries():
     d=safe_json_load(COUNTRIES_FILE,None)
     if d is None:
         d={}
-        for c in COUNTRIES:
-            d[c["code"]]={"flag":c["flag"],"name":c["name"],"emoji":c["emoji"],"owner":None,"defense":False,"damage_taken":0,"power_bonus":c["bonus"]}
+    # Migration: add any newly introduced countries without touching existing ownership.
+    for c in COUNTRIES:
+        d.setdefault(c["code"],{"flag":c["flag"],"name":c["name"],"emoji":c["emoji"],"owner":None,"defense":False,"damage_taken":0,"power_bonus":c["bonus"]})
     return d
 def save_countries(cd):
     try:
@@ -251,6 +455,8 @@ def load_data():
         d={"users":{},"banned_users":[],"user_eq":{},"user_packs":{},"attack_logs":[],"bot_country":None,"bot_last_action":None}
     for k,v in {"users":{},"banned_users":[],"user_eq":{},"user_packs":{},"attack_logs":[],"bot_country":None,"bot_last_action":None,"daily_rewards":{},"coin_transfers":[]}.items():
         if k not in d: d[k]=v
+    for uid,u in d.get("users",{}).items():
+        u.setdefault("warnings",0); u.setdefault("warning_log",[]); u.setdefault("daily_statements",{}); u.setdefault("faction",None)
     return d
 def save_data(data):
     try:
@@ -576,6 +782,21 @@ async def leave_country(bot,cid,data,countries,uid):
     save_data(data); save_countries(countries)
     await bot.send_message(cid,f"🚪 کشور {info['flag']} {info['name']} را ترک کردید!\n💀 تمام دارایی‌ها پاک شد.",chat_keypad=get_main_menu())
 
+
+async def admin_reset_user(bot, data, countries, uid):
+    if uid not in data.get("users",{}): return False
+    for code,info in countries.items():
+        if info.get("owner")==uid:
+            info["owner"]=None; info["defense"]=False; info["damage_taken"]=0
+    u=data["users"][uid]
+    u.update({"coins":0,"has_country":False,"faction":None,"warnings":0,"warning_log":[]})
+    data.setdefault("user_eq",{})[uid]={}
+    data.setdefault("user_packs",{})[uid]=[]
+    save_data(data); save_countries(countries)
+    try: await bot.send_message(uid,"👑 ادمین حساب شما را ریست کرد.")
+    except Exception: pass
+    return True
+
 # ---------- admin functions ----------
 async def admin_change_owner(bot,cid,data,countries,country_code,new_owner_uid):
     if country_code not in countries:
@@ -624,6 +845,7 @@ def get_main_menu():
     b.row(b.button(id="top_owners",text="🏆 رتبه‌بندی"),b.button(id="un_menu",text="🌐 سازمان ملل"))
     b.row(b.button(id="faction_menu",text="⚔️ گروهک‌ها"),b.button(id="daily_reward",text="🎁 پاداش روزانه"))
     b.row(b.button(id="alliance_menu",text="🤝 اتحادها"),b.button(id="battle_report",text="📜 گزارش جنگ"))
+    b.row(b.button(id="rules",text="📜 قوانین"),b.button(id="my_warnings",text="⚠️ اخطارهای من"))
     b.row(b.button(id="leave_country",text="🚪 خروج از کشور"))
     return b.build(resize_keyboard=True,on_time_keyboard=True)
 
@@ -758,6 +980,10 @@ def get_admin_panel(bs):
     b.row(b.button(id="ad_remove_eq",text="➖ -تجهیزات"),b.button(id="ad_un_manage",text="🌐 مدیریت سازمان ملل"))
     b.row(b.button(id="ad_change_owner",text="🔄 تغییر مالک"),b.button(id="ad_reset_country",text="♻️ ریست کشور"))
     b.row(b.button(id="ad_ban",text="🚫 مسدود"),b.button(id="ad_unban",text="✅ رفع مسدود"))
+    b.row(b.button(id="ad_warn",text="⚠️ اخطار"),b.button(id="ad_unwarn",text="🧹 حذف اخطار"))
+    b.row(b.button(id="ad_reset_user",text="👑 ریست کاربر"),b.button(id="ad_give_country",text="🌍 اعطای کشور"))
+    b.row(b.button(id="ad_user_search",text="🔎 جستجوی کاربر"),b.button(id="ad_economy",text="💰 اقتصاد"))
+    b.row(b.button(id="ad_system",text="🛡 وضعیت سیستم"),b.button(id="ad_backup",text="💾 پشتیبان"))
     if bs.get("online",True): b.row(b.button(id="ad_bot_off",text="🔴 خاموش کردن ربات"))
     else: b.row(b.button(id="ad_bot_on",text="🟢 روشن کردن ربات"))
     b.row(b.button(id="ad_to_main_menu",text="🏠 منوی اصلی"),b.button(id="ad_close",text="🔒 خروج"))
@@ -804,10 +1030,15 @@ async def handler(bot_instance:Robot,msg:Message):
             await msg.reply("🚫 مسدود هستید."); return
         username=guser(msg)
         if uid not in data.get("users",{}):
-            data["users"][uid]={"join_date":datetime.now().isoformat(),"coins":1000,"username":username or f"فرمانده{uid[:6]}","has_country":False,"daily_statements":{},"faction":None}
+            data["users"][uid]={"join_date":datetime.now().isoformat(),"coins":1000,"username":username or f"فرمانده{uid[:6]}","has_country":False,"daily_statements":{},"faction":None,"warnings":0,"warning_log":[]}
             save_data(data)
+        data["users"][uid].setdefault("warnings",0); data["users"][uid].setdefault("warning_log",[])
         if username and data["users"][uid].get("username")!=username:
             data["users"][uid]["username"]=username; save_data(data)
+        # Moderation: each detected insult = 1 warning.
+        if text and not is_admin and contains_bad_word(text):
+            await issue_warning(bot_instance, data, countries, uid, "توهین/فحاشی")
+            return
         await bot_ai(bot_instance,data,countries)
 
         # admin states
@@ -974,6 +1205,86 @@ async def handler(bot_instance:Robot,msg:Message):
                     await bot_instance.send_message(cid,f"✅ {count} {eq_name} کم شد." if ok else f"❌ {msg}")
                 except: await bot_instance.send_message(cid,"❌ فرمت اشتباه")
                 user_states[cid]={}; return
+            if cb=="ad_warn":
+                user_states[cid]={"admin_warn":True}
+                await bot_instance.send_message(cid,"⚠️ شناسه و دلیل اختیاری:\nمثال: 12345 اسپم",chat_keypad=get_admin_back_cancel()); return
+            if user_states.get(cid,{}).get("admin_warn"):
+                parts=text.split(" ",1); target=parts[0]; reason=parts[1] if len(parts)>1 else "تخلف از قوانین"
+                if target not in data["users"]: await bot_instance.send_message(cid,"❌ کاربر یافت نشد!")
+                elif target in ADMINS: await bot_instance.send_message(cid,"🛡️ برای ادمین اخطار ثبت نمی‌شود.")
+                else:
+                    await issue_warning(bot_instance,data,countries,target,reason)
+                    await bot_instance.send_message(cid,f"✅ اخطار ثبت شد: {warning_count(data,target)}/{MAX_WARNINGS}")
+                user_states[cid]={}; return
+            if cb=="ad_unwarn":
+                user_states[cid]={"admin_unwarn":True}
+                await bot_instance.send_message(cid,"🧹 شناسه کاربر:",chat_keypad=get_admin_back_cancel()); return
+            if user_states.get(cid,{}).get("admin_unwarn"):
+                target=text.strip()
+                if target not in data["users"]: await bot_instance.send_message(cid,"❌ کاربر یافت نشد!")
+                else:
+                    data["users"][target]["warnings"]=max(0,warning_count(data,target)-1)
+                    save_data(data)
+                    await bot_instance.send_message(cid,f"✅ اخطار حذف شد: {warning_count(data,target)}/{MAX_WARNINGS}")
+                user_states[cid]={}; return
+            if cb=="ad_reset_user":
+                user_states[cid]={"admin_reset_user":True}
+                await bot_instance.send_message(cid,"👑 شناسه کاربر برای ریست کامل:",chat_keypad=get_admin_back_cancel()); return
+            if user_states.get(cid,{}).get("admin_reset_user"):
+                target=text.strip()
+                if target not in data["users"]: await bot_instance.send_message(cid,"❌ کاربر یافت نشد!")
+                else:
+                    await admin_reset_user(bot_instance,data,countries,target)
+                    await bot_instance.send_message(cid,"✅ کاربر ریست شد.")
+                user_states[cid]={}; return
+            if cb=="ad_give_country":
+                await bot_instance.send_message(cid,"🌍 کشور مورد نظر:",chat_keypad=get_admin_country_kb(countries,"ad_give_c_")); return
+            if cb and cb.startswith("ad_give_c_"):
+                code=cb.replace("ad_give_c_","")
+                user_states[cid]={"admin_give_country":True,"country_code":code}
+                await bot_instance.send_message(cid,"🆔 شناسه کاربر جدید:",chat_keypad=get_admin_back_cancel()); return
+            if user_states.get(cid,{}).get("admin_give_country"):
+                target=text.strip(); code=user_states[cid]["country_code"]
+                if target not in data["users"]: await bot_instance.send_message(cid,"❌ کاربر یافت نشد!")
+                elif any(i.get("owner")==target for i in countries.values()): await bot_instance.send_message(cid,"❌ کاربر قبلاً کشور دارد!")
+                else:
+                    countries[code]["owner"]=target; countries[code]["defense"]=False
+                    data["users"][target]["has_country"]=True
+                    save_countries(countries); save_data(data)
+                    await bot_instance.send_message(cid,f"✅ {countries[code]['flag']} {countries[code]['name']} به کاربر داده شد.")
+                user_states[cid]={}; return
+            if cb=="ad_user_search":
+                user_states[cid]={"admin_search":True}
+                await bot_instance.send_message(cid,"🔎 شناسه یا نام کاربر:",chat_keypad=get_admin_back_cancel()); return
+            if user_states.get(cid,{}).get("admin_search"):
+                q=text.lower(); found=[]
+                for u,info in data["users"].items():
+                    if q in str(u).lower() or q in str(info.get("username","")).lower():
+                        found.append((u,info))
+                if not found: out="❌ نتیجه‌ای پیدا نشد."
+                else:
+                    out="🔎 نتایج:\n" + "\n".join(
+                        f"• {info.get('username','؟')} | `{u}` | 🪙 {fn(get_coins(data,u))} | ⚠️ {warning_count(data,u)}"
+                        for u,info in found[:15])
+                await bot_instance.send_message(cid,out,chat_keypad=get_admin_back())
+                user_states[cid]={}; return
+            if cb=="ad_economy":
+                total=sum(get_coins(data,u) for u in data["users"])
+                packs=sum(len(v) for v in data.get("user_packs",{}).values())
+                eq=sum(sum(int(x) for x in v.values()) for v in data.get("user_eq",{}).values())
+                await bot_instance.send_message(cid,
+                    f"💰 اقتصاد سرور\n🪙 مجموع کوین: {fn(total)}\n📦 پک‌های کاربران: {fn(packs)}\n🧰 مجموع تجهیزات: {fn(eq)}",
+                    chat_keypad=get_admin_back()); return
+            if cb=="ad_system":
+                await bot_instance.send_message(cid,
+                    f"🛡 وضعیت سیستم\n👥 کاربران: {len(data['users'])}\n🌍 کشورها: {len(countries)}\n🚫 مسدودها: {len(data.get('banned_users',[]))}\n⚠️ مجموع اخطار: {sum(warning_count(data,u) for u in data['users'])}\n🤖 AI: {'فعال' if bs.get('online',True) else 'خاموش'}",
+                    chat_keypad=get_admin_back()); return
+            if cb=="ad_backup":
+                backup_name=f"worldwar_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+                backup={"data":data,"countries":countries,"alliance":adata,"un":load_un(),"status":bs}
+                Path(backup_name).write_text(json.dumps(backup,ensure_ascii=False,indent=2),encoding="utf-8")
+                await bot_instance.send_message(cid,f"💾 پشتیبان ساخته شد: `{backup_name}`",chat_keypad=get_admin_back()); return
+
             if cb=="ad_un_manage":
                 un=load_un()
                 await bot_instance.send_message(cid,f"🌐 مدیریت سازمان ملل\n👑 رئیس: {un.get('leader','ندارد')}\n👥 اعضا: {len(un.get('members',[]))}\n📋 درخواست‌ها: {len(un.get('requests',[]))}",chat_keypad=get_admin_back()); return
@@ -1014,6 +1325,16 @@ async def handler(bot_instance:Robot,msg:Message):
             return
 
         # user menu
+        if cb=="rules":
+            await bot_instance.send_message(cid,RULES_TEXT,chat_keypad=get_rules_menu()); return
+        if cb=="my_warnings":
+            logs=data["users"][uid].get("warning_log",[])
+            recent="\n".join(f"• {x.get('reason','تخلف')} | {x.get('time','')[:19]}" for x in logs[-5:])
+            await bot_instance.send_message(cid,
+                f"⚠️ اخطارهای شما: {warning_count(data,uid)}/{MAX_WARNINGS}\n\n"
+                f"{recent or '✅ اخطاری ثبت نشده است.'}\n\n"
+                "🔴 اخطار سوم = ریست کشور + مسدودی",
+                chat_keypad=get_rules_menu()); return
         if cb=="daily_reward": await daily(bot_instance,cid,data,uid); return
         if cb=="leave_country":
             if not user_states.get(cid,{}).get("confirm_leave"):
@@ -1029,7 +1350,7 @@ async def handler(bot_instance:Robot,msg:Message):
             fac=user.get("faction")
             fac_name=f"{FACTIONS[fac]['icon']} {FACTIONS[fac]['name']}" if fac and fac in FACTIONS else "❌ ندارد"
             aname,_=get_al(adata,uid); al_str=aname if aname else "❌ ندارد"
-            txt=f"👤 پروفایل\n🆔 {gid(msg,uid)}\n🔑 شناسه: {st(uid,'m')}\n🪙 کوین: {fn(user_coins)}\n⚔️ قدرت: {fn(pwr)}\n🌐 سازمان ملل: {un_status}\n⚔️ گروهک: {fac_name}\n🤝 اتحاد: {al_str}"
+            txt=f"👤 پروفایل\n🆔 {gid(msg,uid)}\n🔑 شناسه: {st(uid,'m')}\n🪙 کوین: {fn(user_coins)}\n⚔️ قدرت: {fn(pwr)}\n⚠️ اخطار: {warning_count(data,uid)}/{MAX_WARNINGS}\n🌐 سازمان ملل: {un_status}\n⚔️ گروهک: {fac_name}\n🤝 اتحاد: {al_str}"
             if my: txt+=f"\n🌍 کشور: {my['flag']} {my['name']}\n💥 خسارت: {fn(my.get('damage_taken',0))}/۲۰۰,۰۰۰"
             await bot_instance.send_message(cid,txt); return
         if cb=="alliance_menu":
@@ -1215,7 +1536,7 @@ async def handler(bot_instance:Robot,msg:Message):
             await bot_instance.send_message(cid,"🛒 فروشگاه پک‌ها",chat_keypad=get_shop_menu()); return
         for pn in PACKS:
             if cb==f"shop_{pn}":
-                await bot_instance.send_message(cid,f"📦 {pn}\n💰 {fn(PACKS[pn][0])} تومان\nبرای خرید به {ADMIN_USERNAME} پیام دهید."); return
+                await bot_instance.send_message(cid,f"📦 {pn}\n💰 {fn(PACKS[pn][0])} تومان\n🔴 مبالغ پرداخت‌شده برای پک و خریدها پس داده نمی‌شود.\nبرای خرید به {ADMIN_USERNAME} پیام دهید."); return
         if cb=="send_message":
             if not any(i.get("owner")==uid for i in countries.values()): return await bot_instance.send_message(cid,"❌ کشور ندارید!")
             user_states[cid]={"wait_msg":True}
@@ -1297,7 +1618,7 @@ async def main():
 if __name__=="__main__":
     os_system('cls' if os_name=='nt' else 'clear')
     load_data(); load_countries(); load_un(); load_alliance(); load_bot_status()
-    print("🚀 ربات جنگ جهانی با ۳۳ کشور در حال اجراست...\n")
+    print("🚀 ربات جنگ جهانی با ۱۵۰ کشور در حال اجراست...\n")
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
