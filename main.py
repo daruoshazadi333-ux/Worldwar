@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 # ---------- config ----------
 BOT_TOKEN = "BHJEGG0LZYHJRDVYGAQUHCZXQLNBOMCRDTAWBRSPVRGVDOHEJZIZOOXSYIXOEEOK"
-ADMINS = [admin for admin in ["b0IHXHW0ZiA04b38619deee0de232fe7", "b0IHXHW0nOE0346b7cf8cf9382619504"] if admin]
+ADMINS = [admin for admin in ["", "b0IHXHW0nOE0346b7cf8cf9382619504"] if admin]
 ADMIN_PASSWORD = "admin090hk989897877"
 ADMIN_USERNAME = "@admin10blue"
 DATA_FILE = Path("worldwar_data.json")
