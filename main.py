@@ -1,4 +1,4 @@
-import asyncio, json, random, logging, traceback, time
+imp@#ort asyncio, json, random, logging, traceback, time
 from pathlib import Path
 from datetime import datetime, date, timedelta
 from os import system as os_system, name as os_name
